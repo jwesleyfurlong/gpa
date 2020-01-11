@@ -1,0 +1,190 @@
+---
+title: "GPA Deals by Destination"
+author: "Wesley Furlong"
+date: "1/11/2020"
+output:
+  flexdashboard::flex_dashboard:
+    orientation: columns
+    vertical_layout: fill
+    
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r results='asis', echo=FALSE, include=FALSE,}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+
+library(tidyverse)
+library(lubridate)
+library(formattable)
+
+```
+
+```{r results='asis', echo=FALSE, include=FALSE,}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+
+deals_1_20 <- readRDS("gpa_deals_1_20.rds")
+contacts_1_20 <- readRDS("gpa_contacts_1_20.rds")
+```
+
+```{r results='asis', echo=FALSE, include=FALSE,}
+knitr::opts_chunk$set(echo = TRUE, warning=FALSE)
+
+gpa_contacts_1_20 <- contacts_1_20 %>%
+    filter(Network %in% c("Starwood Animal Transport", "Pacific Pet Transport", "Multiple"))
+
+gpa_join_1_20 <- deals_1_20 %>%
+    full_join(gpa_contacts_1_20, by= c("vidContact" = "vid"))
+
+gpa_join_1_20$DateAdded <- as.Date(gpa_join_1_20$DateAdded)
+gpa_join_1_20$DateCreate <- as.Date(gpa_join_1_20$DateCreate)
+gpa_contacts_1_20$DateAdded <- as.Date(gpa_contacts_1_20$DateAdded)
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    na_if(0)
+
+gpa_contacts_1_20 <- gpa_contacts_1_20 %>%
+    na_if(0)
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    
+    set_names(names(.) %>% str_to_lower()) %>%
+    rename(dest_city     = routedestinationcity,
+           dest_country  = routedestinationcountry,
+           orig_city     = routeoriginationcity,
+           vid           = vidcontact,
+           prc           = salesteammember,
+           salesperson   = contactowner) %>%
+    
+    rename_at(.vars      = vars(c(contactpriority, hubspotscore, likelihoodtoclose)),
+              .funs      = ~str_c("sales_", .)) %>%
+    
+    mutate( year         = year(dateadded),
+            month        = month(dateadded),
+            quarter      = quarter(dateadded),
+            day          = day(dateadded)) %>%
+    
+    arrange(desc(datecreate))
+
+
+
+gpa_contacts_1_20 <- gpa_contacts_1_20 %>%
+    set_names(names(.) %>% str_to_lower()) %>%
+    rename(salesperson  = contactowner,
+           dest_city    = destinationcity) %>%
+    rename_at(.vars     = vars(c(contactpriority, hubspotscore, likelihoodtoclose)),
+              .funs     = ~str_c("sales_", .)) %>%
+    
+    mutate(year         = year(dateadded),
+           month        = month(dateadded),
+           quarter      = quarter(dateadded),
+           day          = day(dateadded)) %>%
+    arrange(desc(dateadded))
+
+str(gpa_contacts_1_20)
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    
+    mutate(dealstage = case_when(
+        dealstage == "d9045b55-5ce0-4d74-b4d9-65692267cae0" ~ "Transportation Booking Requested",
+        TRUE ~ dealstage))
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    mutate(dealstage = case_when(
+        dealstage == "4de61cda-2d29-43c6-bc92-cac7ae27075c" ~ "First Stage Document Check Requested",
+        TRUE ~ dealstage))
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    mutate(dealstage = case_when(
+        dealstage == "20f202fb-41d2-4dbb-8b48-a9bd01ef24c0" ~ "Final Document Check Requested",
+        TRUE ~ dealstage))
+
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    
+    mutate(deal_stage = case_when(
+        
+        str_detect(str_to_lower(dealstage), "qualifiedtobuy") ~ "qualified to buy",
+        str_detect(str_to_lower(dealstage), "deal_complete") ~ "deal complete",
+        str_detect(str_to_lower(dealstage), "1st_stage_paperwork_complete") ~ "first stage paperwork complete",
+        str_detect(str_to_lower(dealstage), "final document check requested") ~ "final document check requested",
+        str_detect(str_to_lower(dealstage), "first stage document check requested") ~ "first stage document check requested",
+        str_detect(str_to_lower(dealstage), "transportation booking requested") ~ "transportation booking requested",
+        str_detect(str_to_lower(dealstage), "decisionmakerboughtin") ~ "decision maker bought in",
+        str_detect(str_to_lower(dealstage), "pet_in_transit") ~ "pet in transit",
+        str_detect(str_to_lower(dealstage), "appointmentscheduled") ~ "appointment scheduled",
+        str_detect(str_to_lower(dealstage), "closedwon") ~ "closed won",
+        str_detect(str_to_lower(dealstage), "presentationscheduled") ~ "presentation scheduled", TRUE ~ dealstage)) 
+
+
+gpa_deals_1_20 <- gpa_join_1_20 %>%
+    filter(dealpipeline == "GPA Deal Pipeline")
+
+
+# Feature Engineering ----
+
+# Calculate close rate
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    mutate(close_rate = case_when(
+        is.na(dealid) & !is.na(vid) & !is.na(salesperson) ~ "no deal",
+        !is.na(dealid) & !is.na(vid) & !is.na(salesperson) & !is.na(amount) ~ "deal",
+        TRUE ~ "NA")) %>%
+    
+    mutate(close_rate_gpa = case_when(
+        close_rate   == "deal" & dealpipeline == "GPA Deal Pipeline"  ~ "1",
+        dealpipeline == "GPR Pipeline" ~ "NA",
+        TRUE ~ "0"
+    )) %>%
+    filter(close_rate != "NA") %>%
+    mutate(close_rate_gpa = close_rate_gpa %>% as.numeric())
+
+
+
+# Create flags for lead status 
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    mutate(new          = leadstatus   %>% str_to_lower() %>% str_detect("new") %>% as.numeric(),
+           quoted       = leadstatus   %>% str_to_lower() %>% str_detect("quoted") %>% as.numeric(),
+           holding      = leadstatus   %>% str_to_lower() %>% str_detect("holding") %>% as.numeric(),
+           est_comm     = leadstatus   %>% str_to_lower() %>% str_detect("established communication") %>% as.numeric(),
+           customer     = leadstatus   %>% str_to_lower() %>% str_detect("customer") %>% as.numeric(),
+           dead         = leadstatus   %>% str_to_lower() %>% str_detect("dead") %>% as.numeric(),
+           form_incompl = leadstatus   %>% str_to_lower() %>% str_detect("form incomplete") %>% as.numeric(),
+           puppy        = leadstatus   %>% str_to_lower() %>% str_detect("puppy") %>% as.numeric(),
+           booking      = leadstatus   %>% str_to_lower() %>% str_detect("booking") %>% as.numeric()) %>%
+    arrange(desc(dateadded)) 
+
+# Create flags for deal_stage
+
+gpa_join_1_20 <- gpa_join_1_20 %>%
+    
+    mutate(qualified_to_buy = deal_stage   %>% str_to_lower() %>% str_detect("qualified to buy") %>% as.numeric(),
+           deal_complete    = deal_stage   %>% str_to_lower() %>% str_detect("deal complete") %>% as.numeric(),
+           closed_won       = deal_stage   %>% str_to_lower() %>% str_detect("closed won") %>% as.numeric(),
+           presentation_sch = deal_stage   %>% str_to_lower() %>% str_detect("presentation scheduled") %>% as.numeric(),
+           dec_mkr_bt_in    = deal_stage   %>% str_to_lower() %>% str_detect("decision maker bought in") %>% as.numeric(),
+           appt_scheduled   = deal_stage   %>% str_to_lower() %>% str_detect("appointment scheduled") %>% as.numeric())
+
+str(gpa_join_1_20)
+
+```
+
+```{r}
+
+gpa_join_1_20 %>%
+  select(dest_country, datecreate) %>%
+  filter(datecreate >= as.Date("2018-01-01")) %>% 
+  group_by(dest_country) %>% 
+  summarise(count = n()) %>% 
+  arrange(desc(count)) %>% 
+  DT::datatable()
+```
+
+
+
